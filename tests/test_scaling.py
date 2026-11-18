@@ -1,4 +1,4 @@
-"""Tests for GET /recipes/{id}/scaled (task 3) — generator draft v2."""
+"""Tests for GET /recipes/{id}/scaled (task 3)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,6 +54,24 @@ def test_decimal_quantity_scales_exactly():
     body = client.get(f"/recipes/{recipe_id}/scaled?factor=3").json()
 
     assert body["ingredients"] == ["0.3 kg sugar"]
+
+
+def test_quantity_at_end_of_string_is_scaled():
+    # The `$` half of the standalone-token lookahead: no unit follows the number.
+    recipe_id = _recipe(["200"])
+
+    body = client.get(f"/recipes/{recipe_id}/scaled?factor=2").json()
+
+    assert body["ingredients"] == ["400"]
+
+
+def test_fractional_factor_is_exact():
+    # Pins Decimal(str(factor)): Decimal(0.1) would leak 0.010000000000000000555...
+    recipe_id = _recipe(["0.1 kg sugar", "100 g flour"])
+
+    body = client.get(f"/recipes/{recipe_id}/scaled?factor=0.1").json()
+
+    assert body["ingredients"] == ["0.01 kg sugar", "10 g flour"]
 
 
 def test_ingredients_without_quantity_are_unchanged():
