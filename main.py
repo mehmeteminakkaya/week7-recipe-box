@@ -15,9 +15,10 @@ import json
 import re
 import sqlite3
 from contextlib import closing
+from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -26,7 +27,10 @@ DB_PATH = BASE / "recipes.db"
 
 app = FastAPI(title="Recipe Box")
 
-_QUANTITY = re.compile(r"^\s*(\d+(?:\.\d+)?)")
+# A quantity must be a standalone leading token: a number followed by whitespace or the
+# end of the string. That keeps "1/2 cup" and "2,5 kg" out of the math instead of
+# half-parsing them.
+_QUANTITY = re.compile(r"^\s*(\d+(?:\.\d+)?)(?=\s|$)")
 
 
 def get_db() -> sqlite3.Connection:
@@ -175,17 +179,28 @@ def shopping_list(ids: str | None = None):
 
 
 def _scale_ingredient(ingredient: str, factor: float) -> str:
-    """Multiply a leading quantity, e.g. "200 g flour" x2 -> "400 g flour"."""
+    """Multiply a standalone leading quantity, e.g. "200 g flour" x2 -> "400 g flour".
+
+    ``Decimal`` keeps the arithmetic exact, so a factor of 1 is an identity and large
+    integers are never rendered in scientific notation. Non-standalone leading numbers
+    ("1/2 cup", "2,5 kg", "200g flour") are left untouched: guessing a fraction grammar
+    or a decimal separator would silently change the recipe.
+    """
     match = _QUANTITY.match(ingredient)
     if match is None:
         return ingredient
-    amount = float(match.group(1)) * factor
-    return f"{amount:g}{ingredient[match.end() :]}"
+    amount = Decimal(match.group(1)) * Decimal(str(factor))
+    return f"{format(amount.normalize(), 'f')}{ingredient[match.end() :]}"
 
 
 @app.get("/recipes/{recipe_id}/scaled")
-def scale_recipe(recipe_id: int, factor: float = 2):
-    """Return the recipe with its leading ingredient quantities scaled."""
+def scale_recipe(recipe_id: int, factor: float = Query(2, gt=0, le=100)):
+    """Return the recipe with its leading quantities multiplied by ``factor``.
+
+    ``factor`` must be in ``(0, 100]``; anything else — including non-numeric values,
+    ``inf`` and ``nan`` — is rejected by FastAPI with 422. Nothing is written to the
+    database; the response has the same shape as ``GET /recipes/{id}``.
+    """
     with closing(get_db()) as conn:
         row = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
     if row is None:
