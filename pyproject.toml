@@ -1,0 +1,21 @@
+[project]
+name = "week7-recipe-box"
+version = "0.1.0"
+description = "Recipe box sprint: concurrent agents and a generator-critic loop (Week 7)"
+requires-python = ">=3.10"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
+testpaths = ["test_main.py", "tests"]
