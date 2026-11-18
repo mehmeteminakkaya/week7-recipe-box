@@ -12,6 +12,7 @@ Test:
 """
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -24,6 +25,8 @@ BASE = Path(__file__).parent
 DB_PATH = BASE / "recipes.db"
 
 app = FastAPI(title="Recipe Box")
+
+_QUANTITY = re.compile(r"^\s*(\d+(?:\.\d+)?)")
 
 
 def get_db() -> sqlite3.Connection:
@@ -169,3 +172,24 @@ def shopping_list(ids: str | None = None):
                 seen.add(key)
                 items.append(ingredient)
     return {"items": items}
+
+
+def _scale_ingredient(ingredient: str, factor: float) -> str:
+    """Multiply a leading quantity, e.g. "200 g flour" x2 -> "400 g flour"."""
+    match = _QUANTITY.match(ingredient)
+    if match is None:
+        return ingredient
+    amount = float(match.group(1)) * factor
+    return f"{amount:g}{ingredient[match.end() :]}"
+
+
+@app.get("/recipes/{recipe_id}/scaled")
+def scale_recipe(recipe_id: int, factor: float = 2):
+    """Return the recipe with its leading ingredient quantities scaled."""
+    with closing(get_db()) as conn:
+        row = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown recipe")
+    recipe = _row_to_recipe(row)
+    recipe["ingredients"] = [_scale_ingredient(item, factor) for item in recipe["ingredients"]]
+    return recipe
