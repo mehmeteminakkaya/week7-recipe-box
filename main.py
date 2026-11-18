@@ -79,10 +79,22 @@ def create_recipe(recipe: RecipeIn):
 
 
 @app.get("/recipes")
-def list_recipes():
+def list_recipes(tag: str | None = None):
+    """List recipes ordered by id, optionally filtered by one exact tag.
+
+    ``tag`` is matched case-insensitively and exactly (not as a substring); surrounding
+    whitespace is ignored. Omitting it returns every recipe. A present but blank (or
+    whitespace-only) value is a 400 instead of silently returning everything.
+    """
+    if tag is not None and not tag.strip():
+        raise HTTPException(status_code=400, detail="tag must not be blank")
     with closing(get_db()) as conn:
         rows = conn.execute("SELECT * FROM recipes ORDER BY id").fetchall()
-    return [_row_to_recipe(r) for r in rows]
+    recipes = [_row_to_recipe(r) for r in rows]
+    if tag is None:
+        return recipes
+    wanted = tag.strip().casefold()
+    return [recipe for recipe in recipes if any(t.casefold() == wanted for t in recipe["tags"])]
 
 
 @app.get("/recipes/{recipe_id}")
