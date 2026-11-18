@@ -92,3 +92,68 @@ def get_recipe(recipe_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="unknown recipe")
     return _row_to_recipe(row)
+
+
+SQLITE_INT_MIN = -(2**63)
+SQLITE_INT_MAX = 2**63 - 1
+
+
+def _parse_recipe_ids(ids: str | None) -> list[int]:
+    """Turn the comma-separated ``ids`` query value into a list of recipe ids."""
+    if ids is None or not ids.replace(",", "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="query parameter 'ids' must be a non-empty comma-separated list of recipe ids",
+        )
+    recipe_ids: list[int] = []
+    for token in ids.split(","):
+        token = token.strip()
+        digits = token[1:] if token[:1] in {"+", "-"} else token
+        if not digits.isascii() or not digits.isdecimal():
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid recipe id: {token!r}",
+            )
+        recipe_ids.append(int(token))
+    return recipe_ids
+
+
+def _ingredients_by_id(recipe_ids: list[int]) -> dict[int, list[str]]:
+    """Fetch ``{recipe id: ingredients}`` for ids that can be stored in SQLite."""
+    queryable = [rid for rid in recipe_ids if SQLITE_INT_MIN <= rid <= SQLITE_INT_MAX]
+    if not queryable:
+        return {}
+    placeholders = ", ".join("?" for _ in queryable)
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            f"SELECT id, ingredients FROM recipes WHERE id IN ({placeholders})",
+            queryable,
+        ).fetchall()
+    return {row["id"]: json.loads(row["ingredients"]) for row in rows}
+
+
+@app.get("/shopping-list")
+def shopping_list(ids: str | None = None):
+    """Merge the ingredients of the requested recipes into a shopping list.
+
+    ``ids`` is a comma-separated list of recipe ids (``?ids=1,2,3``). The response is
+    ``{"items": [...]}`` with ingredients in first-seen order across the requested
+    recipes, de-duplicated case-insensitively while keeping the first spelling.
+    Missing or blank ``ids`` and non-integer tokens are 400; unknown ids are 404.
+    """
+    requested_ids = list(dict.fromkeys(_parse_recipe_ids(ids)))
+    ingredients_by_id = _ingredients_by_id(requested_ids)
+    unknown_ids = [rid for rid in requested_ids if rid not in ingredients_by_id]
+    if unknown_ids:
+        unknown = ", ".join(str(rid) for rid in unknown_ids)
+        raise HTTPException(status_code=404, detail=f"unknown recipe ids: {unknown}")
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for rid in requested_ids:
+        for ingredient in ingredients_by_id[rid]:
+            key = ingredient.casefold()
+            if key not in seen:
+                seen.add(key)
+                items.append(ingredient)
+    return {"items": items}
